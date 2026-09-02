@@ -1,0 +1,6 @@
+krestiki.db*
+node_modules
+.git
+.claude
+.remember
+test.js

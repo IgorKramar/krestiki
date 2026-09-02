@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Крестики-нолики онлайн</title>
+<link rel="icon" href="data:,">
+<style>
+:root { --bg:#f6f7f9; --fg:#1b1f24; --muted:#6b7280; --card:#fff; --line:#e5e7eb; --accent:#2563eb; --x:#dc2626; --o:#2563eb; --win:#fef3c7; --ok:#16a34a; --bad:#dc2626; }
+@media (prefers-color-scheme: dark) { :root { --bg:#0f1115; --fg:#e6e8eb; --muted:#9aa3ad; --card:#181b21; --line:#2a2f37; --win:#3b3410; } }
+* { box-sizing:border-box }
+body { margin:0; font:16px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--fg) }
+header { display:flex; align-items:center; gap:16px; padding:12px 20px; border-bottom:1px solid var(--line); background:var(--card) }
+header h1 { font-size:18px; margin:0 } header h1 a { color:inherit; text-decoration:none }
+nav { display:flex; gap:14px; align-items:center; margin-left:auto } nav .row[hidden] { display:none } nav .row { gap:14px }
+nav a { color:var(--accent); text-decoration:none } nav a.active { font-weight:600; text-decoration:underline }
+main { max-width:760px; margin:0 auto; padding:20px }
+h2, h3 { margin:0 0 12px }
+.card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px }
+button { font:inherit; padding:8px 14px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--fg); cursor:pointer }
+button.primary { background:var(--accent); color:#fff; border-color:var(--accent) }
+button:disabled { opacity:.5; cursor:default }
+input { font:inherit; padding:8px 12px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg) }
+code { background:var(--bg); padding:2px 6px; border-radius:6px; word-break:break-all }
+.err { color:var(--bad) } .muted { color:var(--muted) }
+.row { display:flex; gap:10px; align-items:center; flex-wrap:wrap }
+.board { display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; width:min(90vw, 330px); margin:16px auto }
+.cell { aspect-ratio:1; font-size:48px; font-weight:700; border-radius:10px; display:flex; align-items:center; justify-content:center; padding:0 }
+.cell.X, .X { color:var(--x) } .cell.O, .O { color:var(--o) } .cell.win { background:var(--win) }
+.cell:not(:disabled):hover { border-color:var(--accent) }
+.dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--muted); margin-right:6px }
+.dot.on { background:var(--ok) }
+.conn { font-size:13px; color:var(--ok) } .conn.off { color:var(--bad) }
+table { width:100%; border-collapse:collapse } th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line) } th { color:var(--muted); font-weight:500; font-size:13px }
+.stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(105px, 1fr)); gap:10px }
+.stat { text-align:center; padding:10px; border:1px solid var(--line); border-radius:10px; color:var(--muted); font-size:13px }
+.stat b { display:block; font-size:24px; color:var(--fg) }
+.me { font-weight:600 }
+.status { font-size:20px; text-align:center; margin:8px 0 }
+ul { padding:0; list-style:none; margin:0 } li { display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--line); flex-wrap:wrap } li:last-child { border-bottom:0 }
+.grow { flex:1; min-width:160px }
+.about p, .about li { line-height:1.6 } .about h3 { margin-top:22px } .about ol.plain { padding-left:20px } .about ul.plain li { display:list-item; list-style:disc; margin-left:20px; border:0; padding:4px 0 }
+.diagram { overflow-x:auto; font-size:12px; line-height:1.3; background:var(--bg); padding:12px; border-radius:8px }
+#toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:var(--bad); color:#fff; padding:10px 16px; border-radius:8px; opacity:0; transition:opacity .2s; pointer-events:none }
+#toast.show { opacity:1 }
+</style>
+</head>
+<body>
+<header>
+  <h1><a href="#/lobby">✕○ Крестики-нолики</a></h1>
+  <span id="conn" class="conn"></span>
+  <nav>
+    <span id="nav" class="row" hidden>
+      <a href="#/lobby" data-view="lobby">Лобби</a>
+      <a href="#/dashboard" data-view="dashboard">Статистика</a>
+    </span>
+    <a href="#/about" data-view="about">Как устроено</a>
+    <span id="nav2" class="row" hidden><span id="who" class="muted"></span><button id="logout">Выйти</button></span>
+  </nav>
+</header>
+<main id="app"></main>
+<div id="toast"></div>
+<script>
+const app = document.getElementById('app');
+const $ = (id) => document.getElementById(id);
+// Всё состояние — копия того, что прислал сервер. Клиент ничего не «предсказывает».
+const S = { me: null, lobby: null, games: new Map(), view: null, cur: null, es: null, timer: null, pending: false };
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const when = (ts) => new Date(ts * 1000).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+const isPlayer = (g) => g.players.X.id === S.me.id || g.players.O?.id === S.me.id;
+const myMark = (g) => g.players.X.id === S.me.id ? 'X' : g.players.O?.id === S.me.id ? 'O' : null;
+
+function toast(msg) {
+  const t = $('toast');
+  t.textContent = msg; t.className = 'show';
+  clearTimeout(t._t); t._t = setTimeout(() => t.className = '', 3500);
+}
+
+async function api(method, path, body) {
+  const r = await fetch(path, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body && JSON.stringify(body) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    if (data.game) onGame(data.game);          // 409/400 приносят актуальную доску
+    if (r.status === 401 && S.view !== 'login') showLogin();
+    throw new Error(data.error || `Ошибка ${r.status}`);
+  }
+  return data;
+}
+
+// ---- SSE
+function connect() {
+  const es = new EventSource('/api/events');
+  S.es = es;
+  es.onopen = () => setConn(true);
+  es.onerror = () => setConn(false);
+  es.addEventListener('hello', (e) => {          // полный снимок: и при входе, и после каждого переподключения
+    const d = JSON.parse(e.data);
+    S.me = d.me; S.lobby = d.lobby;
+    S.games.clear(); for (const g of d.games) S.games.set(g.id, g);
+    $('who').textContent = d.me.name;
+    $('nav').hidden = $('nav2').hidden = false;
+    route();
+  });
+  es.addEventListener('lobby', (e) => { S.lobby = JSON.parse(e.data); if (S.view === 'lobby') renderLobby(); });
+  es.addEventListener('game', (e) => onGame(JSON.parse(e.data)));
+  es.addEventListener('stats', () => { if (S.view === 'dashboard') renderDashboard(); });
+}
+function setConn(ok) { const el = $('conn'); el.textContent = ok ? '● онлайн' : '● переподключение…'; el.className = 'conn' + (ok ? '' : ' off'); }
+
+function onGame(g) {
+  const prev = S.games.get(g.id);
+  S.games.set(g.id, g);
+  const started = g.status === 'playing' && (!prev || prev.status !== 'playing');
+  if (isPlayer(g) && started && S.cur !== g.id) { location.hash = `#/game/${g.id}`; return; }
+  if (S.view === 'game' && S.cur === g.id) renderGame(g.id);
+  else if (S.view === 'lobby') renderLobby();
+}
+
+// ---- роутинг по hash
+function route() {
+  const m = location.hash.match(/^#\/(lobby|dashboard|game|about)(?:\/(\d+))?$/);
+  if (!S.me && m?.[1] !== 'about') return showLogin();
+  if (!m) { location.hash = '#/lobby'; return; }
+  clearTimeout(S.timer);
+  S.view = m[1]; S.cur = m[2] ? Number(m[2]) : null;
+  document.querySelectorAll('nav a').forEach((a) => a.classList.toggle('active', a.dataset.view === S.view));
+  ({ lobby: renderLobby, dashboard: renderDashboard, game: () => renderGame(S.cur), about: renderAbout })[S.view]();
+}
+window.addEventListener('hashchange', route);
+
+// ---- экраны
+function showLogin() {
+  S.view = 'login';
+  document.querySelectorAll('nav a').forEach((a) => a.classList.remove('active'));
+  $('nav').hidden = $('nav2').hidden = true;
+  app.innerHTML = `<div class="card"><h2>Как вас звать?</h2>
+    <form id="login" class="row"><input name="name" placeholder="Имя" maxlength="20" required autofocus autocomplete="off">
+    <button class="primary">Войти</button></form><p id="lerr" class="err"></p>
+    <p class="muted">Имя закрепляется за этим браузером. Чтобы сыграть с самим собой, откройте второе окно в режиме инкогнито.</p></div>`;
+  $('login').onsubmit = async (e) => {
+    e.preventDefault();
+    try { await api('POST', '/api/login', { name: e.target.name.value }); connect(); }
+    catch (err) { $('lerr').textContent = err.message; }
+  };
+}
+$('logout').onclick = async () => {
+  await api('POST', '/api/logout').catch(() => {});
+  S.es?.close(); S.me = null; S.games.clear();
+  history.replaceState(null, '', location.pathname);
+  showLogin();
+};
+
+function renderLobby() {
+  const L = S.lobby ?? { waiting: [], online: 0, playing: 0, finished: 0 };
+  const mine = [...S.games.values()].filter((g) => g.status !== 'finished' && isPlayer(g));
+  const vs = (g) => `${esc(g.players.X.name)} vs ${g.players.O ? esc(g.players.O.name) : '…'}`;
+  app.innerHTML = `
+    <div class="card row"><span>Онлайн: <b>${L.online}</b></span><span>Идёт партий: <b>${L.playing}</b></span><span>Сыграно: <b>${L.finished}</b></span>
+      <button id="create" class="primary" style="margin-left:auto">Создать игру</button></div>
+    ${mine.length ? `<div class="card"><h3>Мои партии</h3><ul>${mine.map((g) => `<li><span class="grow">#${g.id} · ${vs(g)}</span>
+      <span class="muted">${g.status === 'waiting' ? 'ожидание соперника' : 'идёт'}</span><a href="#/game/${g.id}"><button>Открыть</button></a></li>`).join('')}</ul></div>` : ''}
+    <div class="card"><h3>Открытые игры</h3>
+      ${L.waiting.length ? `<ul>${L.waiting.map((g) => `<li><span class="grow"><span class="dot ${g.players.X.online ? 'on' : ''}"></span>${esc(g.players.X.name)} <span class="muted">· #${g.id} · ${when(g.updatedAt)}</span></span>
+        ${g.players.X.id === S.me.id ? `<button data-cancel="${g.id}">Отменить</button>` : `<button class="primary" data-join="${g.id}">Присоединиться</button>`}</li>`).join('')}</ul>`
+      : '<p class="muted">Пока никто не ждёт. Создайте игру: соперник увидит её здесь сразу.</p>'}
+    </div>`;
+  $('create').onclick = () => api('POST', '/api/games').then(({ game }) => { S.games.set(game.id, game); location.hash = `#/game/${game.id}`; }).catch((e) => toast(e.message));
+  app.querySelectorAll('[data-join]').forEach((b) => b.onclick = () => api('POST', `/api/games/${b.dataset.join}/join`).then(({ game }) => onGame(game)).catch((e) => toast(e.message)));
+  app.querySelectorAll('[data-cancel]').forEach((b) => b.onclick = () => api('POST', `/api/games/${b.dataset.cancel}/cancel`).then(() => S.games.delete(Number(b.dataset.cancel))).catch((e) => toast(e.message)));
+}
+
+function renderGame(id) {
+  const g = S.games.get(id);
+  if (!g) {
+    api('GET', `/api/games/${id}`).then(({ game }) => { S.games.set(id, game); if (S.cur === id) renderGame(id); })
+      .catch((e) => { app.innerHTML = `<div class="card"><p class="err">${esc(e.message)}</p><a href="#/lobby">В лобби</a></div>`; });
+    return;
+  }
+  const my = myMark(g), opp = my === 'X' ? 'O' : 'X', oppP = g.players[opp];
+  const myTurn = g.status === 'playing' && my && g.turn === my;
+  let status, actions = '';
+  if (g.status === 'waiting') {
+    status = 'Ждём соперника…';
+    actions = `<p class="muted">Отправьте ссылку <code>${esc(location.href)}</code> или подождите, пока кто-то зайдёт из лобби.</p>
+      ${my === 'X' ? '<button data-act="cancel">Отменить игру</button>' : ''}`;
+  } else if (g.status === 'playing') {
+    status = !my ? `Ходит ${g.turn}` : myTurn ? `Ваш ход (${my})` : `Ход соперника (${g.turn})`;
+    if (my) {
+      actions = '<button data-act="resign">Сдаться</button>';
+      if (!oppP.online) {
+        const since = g.offlineSince[opp];
+        const left = since ? Math.ceil((since + g.offlineClaimMs - Date.now()) / 1000) : null;
+        actions += left !== null && left <= 0
+          ? '<button class="primary" data-act="claim">Соперник не вернулся: засчитать победу</button>'
+          : `<span class="muted">Соперник не в сети${left !== null ? `, засчитать победу можно через ${left} с` : ''}</span>`;
+        clearTimeout(S.timer);
+        S.timer = setTimeout(() => S.view === 'game' && S.cur === id && renderGame(id), 1000);
+      }
+    }
+  } else {
+    status = g.winner === 'draw' ? 'Ничья' : !my ? `Победа: ${g.winner}` : g.winner === my ? '🎉 Вы победили!' : 'Вы проиграли';
+    if (my && !g.rematchId) actions = '<button class="primary" data-act="rematch">Реванш (сторонами меняемся)</button>';
+    if (g.rematchId) actions += `<a href="#/game/${g.rematchId}"><button class="primary">К реваншу #${g.rematchId}</button></a>`;
+    actions += '<a href="#/lobby"><button>В лобби</button></a>';
+  }
+  const player = (m) => { const p = g.players[m]; return p
+    ? `<span class="${m}${p.id === S.me.id ? ' me' : ''}"><span class="dot ${p.online ? 'on' : ''}"></span>${m}: ${esc(p.name)}${p.id === S.me.id ? ' (вы)' : ''}</span>`
+    : '<span class="muted">O: …</span>'; };
+  const win = new Set(g.line ?? []);
+  app.innerHTML = `<div class="card">
+    <div class="row" style="justify-content:space-between">${player('X')}${player('O')}<span class="muted">#${g.id} · ход ${g.version}</span></div>
+    <p class="status">${status}</p>
+    <div class="board">${[...g.board].map((c, i) => `<button class="cell ${c !== '.' ? c : ''} ${win.has(i) ? 'win' : ''}" data-cell="${i}" ${myTurn && c === '.' && !S.pending ? '' : 'disabled'}>${c === '.' ? '' : c}</button>`).join('')}</div>
+    <div class="row" style="justify-content:center">${actions}</div>
+    <p id="gerr" class="err" style="text-align:center;margin:8px 0 0"></p>
+  </div>`;
+  app.querySelectorAll('[data-cell]').forEach((b) => b.onclick = () => act(id, 'move', { cell: Number(b.dataset.cell), version: g.version }));
+  app.querySelectorAll('[data-act]').forEach((b) => b.onclick = () => act(id, b.dataset.act));
+}
+
+async function act(id, action, body = {}) {
+  if (S.pending) return;
+  S.pending = true;
+  app.querySelectorAll('.cell').forEach((b) => b.disabled = true);
+  let err = null;
+  try {
+    const d = await api('POST', `/api/games/${id}/${action}`, body);
+    if (action === 'cancel') { S.games.delete(id); location.hash = '#/lobby'; }
+    else if (d.game) onGame(d.game);
+  } catch (e) { err = e.message; }
+  S.pending = false;
+  if (S.view === 'game') renderGame(S.cur);            // могли уйти на другую партию (реванш)
+  if (err && S.view === 'game' && S.cur === id) $('gerr').textContent = err;
+  else if (err) toast(err);
+}
+
+async function renderDashboard() {
+  let d;
+  try { d = await api('GET', '/api/dashboard'); } catch (e) { app.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+  if (S.view !== 'dashboard') return;
+  const pct = (s) => s.games ? Math.round(100 * s.wins / s.games) + '%' : '—';
+  const result = (g) => g.winner === 'draw' ? 'ничья' : `победа: ${esc(g.players[g.winner].name)}`;
+  const list = (games) => games.length ? `<ul>${games.map((g) => `<li><span class="grow">#${g.id} · <span class="X">${esc(g.players.X.name)}</span> vs <span class="O">${esc(g.players.O.name)}</span></span>
+    <span>${result(g)}</span><span class="muted">${when(g.updatedAt)}</span><a href="#/game/${g.id}"><button>Доска</button></a></li>`).join('')}</ul>` : '<p class="muted">Пока пусто.</p>';
+  app.innerHTML = `
+    <div class="card stats"><div class="stat"><b>${d.totals.online}</b>онлайн</div><div class="stat"><b>${d.totals.playing}</b>идёт партий</div>
+      <div class="stat"><b>${d.totals.waiting}</b>ждут соперника</div><div class="stat"><b>${d.totals.finished}</b>сыграно всего</div></div>
+    <div class="card"><h3>${esc(d.me.name)}: ваша статистика</h3><div class="stats">
+      <div class="stat"><b>${d.me.games}</b>партий</div><div class="stat"><b>${d.me.wins}</b>побед</div><div class="stat"><b>${d.me.losses}</b>поражений</div>
+      <div class="stat"><b>${d.me.draws}</b>ничьих</div><div class="stat"><b>${pct(d.me)}</b>винрейт</div></div></div>
+    <div class="card"><h3>Таблица лидеров</h3><div style="overflow-x:auto"><table><tr><th>#</th><th>Игрок</th><th>Победы</th><th>Поражения</th><th>Ничьи</th><th>Партий</th><th>Винрейт</th></tr>
+      ${d.leaderboard.map((s, i) => `<tr class="${s.id === S.me.id ? 'me' : ''}"><td>${i + 1}</td><td>${esc(s.name)}</td><td>${s.wins}</td><td>${s.losses}</td><td>${s.draws}</td><td>${s.games}</td><td>${pct(s)}</td></tr>`).join('')}</table></div></div>
+    <div class="card"><h3>Мои последние партии</h3>${list(d.recent)}</div>
+    <div class="card"><h3>Последние партии на сервере</h3>${list(d.recentAll)}</div>`;
+}
+
+function renderAbout() {
+  app.innerHTML = `
+  <div class="card about">
+    <h2>Как устроен этот проект</h2>
+    <p>Онлайн-крестики-нолики на двоих: сервер и фронт без единой зависимости, около 700 строк кода вместе с тестами.
+    Ниже — что и почему.</p>
+
+    <h3>Стек</h3>
+    <ul class="plain">
+      <li><b>Node.js ≥ 24</b> — только стандартная библиотека: <code>node:http</code>, <code>node:sqlite</code>, <code>node:test</code>.</li>
+      <li><b>SQLite</b> — один файл, синхронные запросы, никакого драйвера.</li>
+      <li><b>Server-Sent Events</b> — пуш с сервера в браузер вместо WebSocket: это обычный HTTP-ответ, который не закрывают.</li>
+      <li><b>Фронт</b> — один HTML-файл, ванильный JS, роутинг по <code>#hash</code>, ни сборки, ни фреймворка.</li>
+    </ul>
+
+    <h3>Схема</h3>
+<pre class="diagram">
+ браузер Ани                          сервер (один процесс)                       браузер Бориса
+ ┌──────────────┐   POST /move {cell, version}  ┌──────────────────┐                 ┌──────────────┐
+ │ index.html   │ ─────────────────────────────▶│ проверить версию │                 │ index.html   │
+ │              │                               │ применить ход    │                 │              │
+ │ EventSource  │◀── event: game {board, v+1} ──│ записать SQLite  │── event: game ─▶│ EventSource  │
+ └──────────────┘        (SSE-поток)            └──────────────────┘   (SSE-поток)   └──────────────┘
+</pre>
+
+    <h3>Почему у обоих игроков всегда одно и то же</h3>
+    <ol class="plain">
+      <li><b>Сервер — единственный источник истины.</b> Клиент не рисует свой ход сам. Он отправляет намерение и ждёт, что вернёт сервер.</li>
+      <li><b>У партии есть номер версии.</b> Каждое изменение доски увеличивает его на единицу. Ход уходит вместе с версией, которую видел игрок.</li>
+      <li><b>Версия не совпала — ход отклонён</b> с кодом <code>409</code>, а в ответе лежит актуальная доска. Так двойной клик, гонка двух вкладок или устаревшее состояние после обрыва сети никогда не портят партию.</li>
+      <li><b>Один процесс, синхронный SQLite.</b> Запросы обрабатываются строго по очереди, поэтому два одновременных хода физически не могут переплестись.</li>
+      <li><b>Оба игрока получают одни и те же события в одном порядке</b> — после каждого изменения сервер рассылает полное состояние партии обоим.</li>
+      <li><b>После любого переподключения приходит полный снимок</b> (<code>hello</code>): текущие партии и лобби. Обрыв сети не оставляет клиента с устаревшей картиной.</li>
+    </ol>
+
+    <h3>События SSE</h3>
+    <table><tr><th>Событие</th><th>Кому</th><th>Когда</th></tr>
+      <tr><td><code>hello</code></td><td>подключившемуся</td><td>при каждом (пере)подключении: профиль, лобби, активные партии</td></tr>
+      <tr><td><code>game</code></td><td>обоим игрокам</td><td>ход, присоединение, сдача, реванш, соперник вышел или вернулся</td></tr>
+      <tr><td><code>lobby</code></td><td>всем</td><td>список ожидающих игр или счётчики изменились</td></tr>
+      <tr><td><code>stats</code></td><td>всем</td><td>партия завершилась, дашборд надо обновить</td></tr>
+    </table>
+
+    <h3>Присутствие</h3>
+    <p>«Онлайн» значит: у пользователя есть открытый SSE-поток. Обрыв потока — событие <code>game</code> сопернику с пометкой «не в сети».
+    Если соперник не вернулся за 30 секунд, второй игрок может засчитать себе победу; сервер проверяет это по своим часам, а не по клиентским.
+    Ожидающая игра ушедшего игрока удаляется через 5 секунд, чтобы перезагрузка страницы её не убивала.</p>
+
+    <h3>Данные</h3>
+    <p>Две таблицы: <code>users</code> (имя, токен cookie) и <code>games</code> (доска строкой из девяти символов, чей ход, статус, победитель, версия, ссылка на реванш).
+    Дашборд — это SQL поверх <code>games</code>: победы и поражения считаются агрегатом по завершённым партиям, отдельной таблицы статистики нет, а значит, ей нечему разойтись с реальностью.</p>
+
+    <h3>Что намеренно не сделано</h3>
+    <ul class="plain">
+      <li><b>Пароли.</b> Имя закрепляется за браузером через cookie. Добавятся, когда понадобится вход с нескольких устройств.</li>
+      <li><b>Несколько инстансов.</b> Один процесс даёт согласованность бесплатно. Для горизонтального масштабирования понадобится общий pub/sub для SSE.</li>
+      <li><b>Оптимистичные ходы на клиенте.</b> Задержка до сервера в крестиках-ноликах незаметна, а честная модель «сервер решает» проще и не расходится.</li>
+      <li><b>WebSocket.</b> Пуш нужен только в сторону клиента, ходов мало, SSE закрывает задачу без единой зависимости и переподключается сам.</li>
+    </ul>
+  </div>`;
+}
+
+api('GET', '/api/me').then(connect).catch(() => { if (location.hash === '#/about') route(); });
+</script>
+</body>
+</html>

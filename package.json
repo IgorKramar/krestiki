@@ -1,0 +1,10 @@
+{
+  "name": "krestiki",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24.2" },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  }
+}
