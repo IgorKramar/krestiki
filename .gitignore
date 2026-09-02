@@ -1,2 +1,3 @@
 krestiki.db*
 node_modules/
+.playwright-mcp/
