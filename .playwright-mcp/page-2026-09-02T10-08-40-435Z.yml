@@ -1,0 +1,9 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - heading [level=1] [ref=e3]:
+      - link "✕○ Крестики-нолики" [ref=e4] [cursor=pointer]:
+        - /url: "#/lobby"
+    - navigation [ref=e5]:
+      - link "Как устроено" [ref=e6] [cursor=pointer]:
+        - /url: "#/about"
+  - main [ref=e7]

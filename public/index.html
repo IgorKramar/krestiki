@@ -93,7 +93,11 @@ function connect() {
   const es = new EventSource('/api/events');
   S.es = es;
   es.onopen = () => setConn(true);
-  es.onerror = () => setConn(false);
+  es.onerror = () => {
+    setConn(false);
+    // После 401 (сессия пропала, например, база сброшена при редеплое) EventSource закрывается навсегда: проверяем сессию сами
+    if (es.readyState === EventSource.CLOSED) api('GET', '/api/me').then(connect).catch(() => {});
+  };
   es.addEventListener('hello', (e) => {          // полный снимок: и при входе, и после каждого переподключения
     const d = JSON.parse(e.data);
     S.me = d.me; S.lobby = d.lobby;
